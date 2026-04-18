@@ -1,0 +1,288 @@
+name: facebook-ad
+version: "1.0"
+description: >
+  Short-form direct-response video ad for Facebook/Instagram feed or reels.
+  Offer-brief-grounded production: loads a structured offer (angle, USPs, proven
+  hooks, mechanism, banned claims) before script writing, enforces DR-ad quality
+  gates (hook strength, CTA, no banned claims), and targets 15-60s 9:16 output.
+  Supports an optional reference video (competitor ad) via the reference_input
+  workflow; we differentiate, not clone.
+category: generated
+stability: beta
+
+default_checkpoint_policy: guided
+
+# Reference video input support (competitor ad teardown)
+reference_input:
+  supported: true
+  analysis_depth: standard
+  analysis_tools:
+    - video_analyzer
+    - transcript_fetcher
+    - video_downloader
+    - scene_detect
+    - frame_sampler
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: true  # unlocks offer_loader + r2_storage
+
+# Reuse explainer director skills where DR-ad logic is identical.
+# Override ONLY proposal-director (the DR-ad-specific stage) and add
+# meta skills for offer context loading and R2 publishing.
+required_skills:
+  - pipelines/explainer/executive-producer
+  - pipelines/explainer/research-director
+  - pipelines/facebook-ad/proposal-director     # CUSTOM — DR-ad concept + offer context
+  - pipelines/explainer/script-director
+  - pipelines/explainer/scene-director
+  - pipelines/explainer/asset-director
+  - pipelines/explainer/edit-director
+  - pipelines/explainer/compose-director
+  - pipelines/explainer/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/explainer/executive-producer
+  budget_default_usd: 1.50
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 15
+
+# Target platforms (short-form vertical)
+target_profiles:
+  - platform: facebook
+    aspect: "9:16"
+    duration_s: [15, 60]
+    caption_style: bold_yellow_bottom
+  - platform: instagram
+    aspect: "9:16"
+    duration_s: [15, 60]
+    caption_style: bold_yellow_bottom
+  - platform: tiktok
+    aspect: "9:16"
+    duration_s: [15, 60]
+    caption_style: bold_white_center
+
+compatible_playbooks:
+  recommended:
+    - clean-professional
+    - flat-motion-graphics
+  also_works:
+    - minimalist-diagram
+  custom_allowed: true
+
+stages:
+  # ── Pre-Production ──────────────────────────────────────────────
+
+  - name: research
+    skill: pipelines/explainer/research-director
+    produces:
+      - research_brief
+    required_tools:
+      - offer_loader
+    tools_available:
+      - offer_loader
+      - video_analyzer
+      - transcript_fetcher
+      - video_downloader
+      - scene_detect
+      - frame_sampler
+    checkpoint_required: false
+    human_approval_default: false
+    review_focus:
+      - "Offer context loaded via offer_loader (required)"
+      - "Offer's banned_claims list captured for downstream gate enforcement"
+      - "Reference video teardown (if reference_url provided) extracts hook mechanic, pacing, CTA framing"
+      - "Primary angle and proven hooks from offer brief are grounded in research findings"
+      - "At least 2 angles_discovered, each distinct from the reference (if any)"
+    success_criteria:
+      - "research_brief.offer_context is populated (loaded from offer_loader)"
+      - "research_brief.banned_claims_list is non-empty"
+      - "If reference_url provided: research_brief.reference_teardown is populated"
+      - "At least 2 angles_discovered"
+
+  - name: proposal
+    skill: pipelines/facebook-ad/proposal-director
+    required_artifacts_in:
+      - research_brief
+    produces:
+      - proposal_packet
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "2-3 concept options, each using a distinct hook formula (OPEN_LOOP / PAIN_AMPLIFICATION / MECHANISM_FRAMING / SPECIFICITY / CREDIBILITY / TIME_COMPRESSION)"
+      - "No concept uses any phrase from offer_context.banned_claims"
+      - "Each concept cites the offer's mechanism (the 'because') — no generic claims"
+      - "If reference-driven: each concept explicitly states why_different vs. the reference"
+      - "Cost estimate itemized per provider, totals under budget_default_usd"
+      - "Self-scorecard: day1_conversion_readiness_0_10 >= 7 for at least one concept"
+    success_criteria:
+      - "Schema-valid proposal_packet with at least 2 concept_options"
+      - "selected_concept has day1_conversion_readiness_0_10 >= 7"
+      - "No banned_claim appears verbatim in any concept hook_line, cta_line, or claim"
+      - "cost_estimate total <= budget_default_usd"
+      - "approval.status is 'approved' or 'approved_with_changes' before proceeding"
+
+  # ── Production ──────────────────────────────────────────────────
+
+  - name: script
+    skill: pipelines/explainer/script-director
+    required_artifacts_in:
+      - proposal_packet
+    optional_artifacts_in:
+      - research_brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "Word count within +/-10% of duration target (DR ads: ~150-160 wpm VO)"
+      - "Opening 2 seconds deliver the approved hook line verbatim or near-verbatim"
+      - "CTA line appears in final 5 seconds"
+      - "No banned_claim from research_brief.banned_claims_list"
+      - "Script grounds at least one claim in offer.mechanism"
+    success_criteria:
+      - "Schema-valid script with enhancement_cues per section"
+      - "Total duration matches selected concept target within 10%"
+      - "Zero banned_claims violations"
+
+  - name: scene_plan
+    skill: pipelines/explainer/scene-director
+    required_artifacts_in:
+      - script
+    optional_artifacts_in:
+      - proposal_packet
+    produces:
+      - scene_plan
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "Full script duration covered with no gaps"
+      - "Visual variety: no 3+ consecutive scenes of same type (slideshow risk)"
+      - "At least 60% of scenes are motion-led (true video, not still + pan)"
+      - "Asset feasibility — every required_asset uses a tool from the production plan"
+    success_criteria:
+      - "Schema-valid scene_plan with required_assets per scene"
+      - "At least 3 different scene types used"
+      - "Motion-led scene ratio >= 0.6"
+
+  - name: assets
+    skill: pipelines/explainer/asset-director
+    required_artifacts_in:
+      - scene_plan
+      - script
+    optional_artifacts_in:
+      - proposal_packet
+    produces:
+      - asset_manifest
+    required_tools:
+      - tts_selector
+      - video_selector
+    optional_tools:
+      - image_selector
+      - music_gen
+    tools_available:
+      - tts_selector
+      - image_selector
+      - video_selector
+      - music_gen
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - "All asset files exist on disk"
+      - "Narration covers all script sections"
+      - "Total cost within approved budget from proposal_packet"
+      - "Video clip aspect ratio matches target_profiles[].aspect (default 9:16)"
+    success_criteria:
+      - "Schema-valid asset_manifest with all required assets generated"
+      - "All file paths resolve to existing files"
+      - "Cumulative cost <= proposal_packet.cost_estimate.total * 1.1"
+
+  - name: edit
+    skill: pipelines/explainer/edit-director
+    required_artifacts_in:
+      - scene_plan
+      - asset_manifest
+    optional_artifacts_in:
+      - script
+    produces:
+      - edit_decisions
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - "All cuts reference valid assets from manifest"
+      - "Subtitles enabled with DR-ad-friendly styling (high-contrast, bold, readable at 320x568)"
+      - "Music configured with ducking (-18 dB under VO)"
+      - "Hook scene fills first 2 seconds exactly"
+      - "CTA scene fills final 3-5 seconds"
+    success_criteria:
+      - "Schema-valid edit_decisions"
+      - "Full video duration covered"
+      - "Subtitle track enabled"
+
+  - name: compose
+    skill: pipelines/explainer/compose-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+    optional_artifacts_in:
+      - scene_plan
+    produces:
+      - render_report
+      - final_review
+    required_tools:
+      - video_compose
+      - audio_mixer
+    optional_tools:
+      - video_stitch
+    tools_available:
+      - video_compose
+      - video_stitch
+      - audio_mixer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - "Output video exists and is playable"
+      - "Duration within +/-5% of target"
+      - "Audio: narration clear, music ducked, no clipping"
+      - "Aspect ratio exactly matches target (no letterboxing)"
+      - "No black frames in first or last 0.5s"
+    success_criteria:
+      - "Schema-valid render_report with output paths"
+      - "Output file exists and passes ffprobe validation"
+      - "Aspect ratio matches target_profiles[].aspect"
+
+  - name: publish
+    skill: pipelines/explainer/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    optional_artifacts_in:
+      - proposal_packet
+    produces:
+      - publish_log
+    required_tools:
+      - r2_storage
+    tools_available:
+      - r2_storage
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - "Final video uploaded to R2 under openmontage/<run-id>/final.mp4"
+      - "Script JSON, concept JSON, and cost log also uploaded"
+      - "Public URLs return HTTP 200"
+      - "Local mirror exists at ~/videos/<offer-slug>/<run-id>/final.mp4"
+    success_criteria:
+      - "Schema-valid publish_log"
+      - "publish_log.artifact_urls.final_video is a reachable https URL"
+      - "publish_log.artifact_urls has entries for: final_video, script, concept, cost_log"
